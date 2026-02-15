@@ -8,10 +8,15 @@
 import os
 import sys
 import subprocess
-import keyring
 import hashlib
 import base64
 from typing import Optional, Tuple
+
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except ImportError:
+    KEYRING_AVAILABLE = False
 
 
 class BiometricAuth:
@@ -82,6 +87,9 @@ class BiometricAuth:
         Returns:
             bool: 是否存储成功
         """
+        if not KEYRING_AVAILABLE:
+            return False
+        
         try:
             # 直接存储原始密码到系统钥匙串
             # macOS 钥匙串会自动要求生物识别验证
@@ -107,6 +115,9 @@ class BiometricAuth:
         Returns:
             Optional[str]: 原始密码，如果不存在或验证失败则返回 None
         """
+        if not KEYRING_AVAILABLE:
+            return None
+        
         try:
             password = keyring.get_password(
                 BiometricAuth.SERVICE_NAME,
@@ -128,6 +139,9 @@ class BiometricAuth:
         Returns:
             bool: 是否删除成功
         """
+        if not KEYRING_AVAILABLE:
+            return False
+        
         try:
             keyring.delete_password(
                 BiometricAuth.SERVICE_NAME,
