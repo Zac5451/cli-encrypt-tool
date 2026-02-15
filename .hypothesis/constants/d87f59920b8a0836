@@ -1,0 +1,4 @@
+# file: /Users/xucan/Projects/veracrypt/VeraCrypt/cli-encrypt-tool/crypto_core.py
+# hypothesis_version: 6.141.1
+
+[b'VCCLI', b'metadata', 0.0, 0.2, 0.4, 0.6, 1.0, 1024.0, 300, 1024, 65536, 500000, '.decrypted', '.encrypted', '.gz', '.tar', '/', '<B', '<I', '<Q', 'AES-256-GCM', 'AES-256-Serpent', 'B', 'ChaCha20-Poly1305', 'GB', 'KB', 'MB', 'OK', 'TB', 'Unknown', 'algorithm', 'clear', 'created_at', 'decrypt_count', 'decrypted_size', 'encrypted_size', 'encryption', 'error', 'expiry_days', 'file', 'file_count', 'max_decrypts', 'metadata_hidden', 'original_dir', 'original_name', 'original_size', 'output', 'output_dir', 'rb', 'remaining_decrypts', 'signature', 'size', 'success', 'utf-8', 'version', 'w', 'wb', '不是有效的加密文件', '不是有效的加密流', '创建临时归档...', '压缩文件...', '完成', '密码强度：中等', '密码强度：弱', '密码强度：强', '密码长度至少需要 8 个字符', '开始加密...', '开始解密...', '文件不存在', '文件已过期', '解压目录...', '解密失败：密码错误或文件已损坏', '解密次数已达上限']
