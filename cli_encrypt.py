@@ -806,10 +806,10 @@ class CLIEncryptTool:
         
         # 询问是否保存密码用于生物识别
         if filepath and BiometricAuth.is_available():
-            response = input(f"\n{Colors.OKCYAN}是否保存密码以便下次使用生物识别验证？(y/N): {Colors.ENDC}")
+            response = input(f"\n{Colors.OKCYAN}💡 是否保存密码到钥匙串？下次解密时可直接使用 Touch ID/Face ID (y/N): {Colors.ENDC}")
             if response.lower() == 'y':
                 if self.biometric_manager.save_password_for_file(filepath, password):
-                    print(f"{Colors.OKGREEN}✓ 密码已安全保存到系统钥匙串{Colors.ENDC}")
+                    print(f"{Colors.OKGREEN}✓ 密码已安全保存，下次解密时将自动使用生物识别验证{Colors.ENDC}")
         
         return password
     
@@ -818,25 +818,25 @@ class CLIEncryptTool:
         if password_arg:
             return password_arg
         
-        # 检查是否可以使用生物识别
+        # 检查是否可以使用生物识别（macOS 专用）
         if filepath and BiometricAuth.is_available():
             if self.biometric_manager.has_saved_password(filepath):
-                print(f"\n{Colors.OKCYAN}检测到已保存的密码凭证{Colors.ENDC}")
-                response = input(f"是否使用生物识别验证？(Y/n): ")
+                print(f"\n{Colors.OKCYAN}🔐 检测到已保存的密码凭证，使用生物识别验证...{Colors.ENDC}")
                 
-                if response.lower() != 'n':
-                    password_hash = self.biometric_manager.get_password_for_file(
-                        filepath, 
-                        f"解密文件: {os.path.basename(filepath)}"
-                    )
-                    
-                    if password_hash:
-                        # 使用保存的密码哈希
-                        # 注意：这里需要返回原始密码，但我们只存储了哈希
-                        # 所以我们需要修改存储策略
-                        return password_hash
-                    else:
-                        print(f"{Colors.WARNING}生物识别验证失败，请手动输入密码{Colors.ENDC}")
+                # 直接尝试使用生物识别获取密码
+                password = self.biometric_manager.get_password_for_file(
+                    filepath, 
+                    f"解密文件: {os.path.basename(filepath)}"
+                )
+                
+                if password:
+                    return password
+                else:
+                    print(f"{Colors.WARNING}⚠ 生物识别验证失败或已取消{Colors.ENDC}")
+                    # 询问是否手动输入密码
+                    response = input(f"是否手动输入密码？(Y/n): ")
+                    if response.lower() == 'n':
+                        return None
         
         print(f"\n{Colors.BOLD}请输入解密密码：{Colors.ENDC}")
         return getpass.getpass("密码: ")
