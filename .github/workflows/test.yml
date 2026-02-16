@@ -242,13 +242,6 @@ jobs:
         path: dist/
         retention-days: 90
       continue-on-error: true
-    
-    - name: 上传构建产物
-      uses: actions/upload-artifact@v3
-      with:
-        name: executable-${{ matrix.os }}
-        path: dist/
-        retention-days: 90
 
   notify:
     name: 通知
