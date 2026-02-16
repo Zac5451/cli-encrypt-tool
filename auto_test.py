@@ -1,454 +1,420 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-自动化测试向导
-使用密钥文件和指纹验证，无需手动输入密码
+自动化测试主控脚本
+整合单元测试、集成测试、E2E测试
 """
 
 import os
 import sys
 import subprocess
-import hashlib
-import tempfile
-import json
 import time
+import json
+from datetime import datetime
 from pathlib import Path
+
+
+class Colors:
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    BOLD = '\033[1m'
+    ENDC = '\033[0m'
 
 
 class AutoTestRunner:
     """自动化测试运行器"""
     
     def __init__(self):
-        self.passed = []
-        self.failed = []
-        self.skipped = []
-        self.test_dir = None
-        self.results = {}
-        
-        # 项目目录和测试目录
-        self.project_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # 测试用密码
-        self.test_password = os.environ.get('TEST_PASSWORD', 'TestPass123!')
+        self.results = {
+            'timestamp': datetime.now().isoformat(),
+            'tests': {}
+        }
+        self.start_time = None
     
     def print_header(self, title):
-        print("\n" + "=" * 60)
-        print(f"  {title}")
-        print("=" * 60)
+        """打印标题"""
+        print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.CYAN}  {title}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.ENDC}\n")
     
-    def print_step(self, num, desc, status=""):
-        status_str = {"ok": "✓", "fail": "✗", "skip": "⊘"}.get(status, "○")
-        print(f"\n[{status_str}] 【步骤 {num}】{desc}")
+    def run_command(self, cmd, description, timeout=300):
+        """运行命令并记录结果"""
+        print(f"{Colors.BLUE}▶ {description}...{Colors.ENDC}")
+        
+        start = time.time()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            duration = time.time() - start
+            
+            success = result.returncode == 0
+            
+            self.results['tests'][description] = {
+                'success': success,
+                'duration': duration,
+                'returncode': result.returncode,
+                'stdout': result.stdout[-500:] if len(result.stdout) > 500 else result.stdout,
+                'stderr': result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+            }
+            
+            if success:
+                print(f"{Colors.GREEN}✓ {description} 完成 ({duration:.2f}s){Colors.ENDC}\n")
+            else:
+                print(f"{Colors.RED}✗ {description} 失败 ({duration:.2f}s){Colors.ENDC}")
+                if result.stderr:
+                    print(f"{Colors.YELLOW}错误信息: {result.stderr[:200]}{Colors.ENDC}\n")
+            
+            return success
+            
+        except subprocess.TimeoutExpired:
+            duration = time.time() - start
+            print(f"{Colors.RED}✗ {description} 超时 ({duration:.2f}s){Colors.ENDC}\n")
+            self.results['tests'][description] = {
+                'success': False,
+                'duration': duration,
+                'error': 'timeout'
+            }
+            return False
+        except Exception as e:
+            duration = time.time() - start
+            print(f"{Colors.RED}✗ {description} 异常: {e}{Colors.ENDC}\n")
+            self.results['tests'][description] = {
+                'success': False,
+                'duration': duration,
+                'error': str(e)
+            }
+            return False
     
-    def run_cmd(self, cmd, cwd=None):
-        """运行命令"""
-        # 使用项目目录作为基础
-        work_dir = cwd or self.project_dir
-        result = subprocess.run(
-            cmd, shell=True,
-            capture_output=True,
-            text=True,
-            cwd=work_dir
-        )
-        return result
+    def check_dependencies(self):
+        """检查依赖"""
+        self.print_header("检查依赖")
+        
+        dependencies = [
+            ('python3', 'Python 3'),
+            ('pytest', 'pytest'),
+        ]
+        
+        all_ok = True
+        for cmd, name in dependencies:
+            try:
+                if cmd == 'pytest':
+                    subprocess.run([sys.executable, '-m', 'pytest', '--version'], 
+                                 capture_output=True, check=True)
+                else:
+                    subprocess.run([cmd, '--version'], capture_output=True, check=True)
+                print(f"{Colors.GREEN}✓ {name} 已安装{Colors.ENDC}")
+            except:
+                print(f"{Colors.RED}✗ {name} 未安装{Colors.ENDC}")
+                all_ok = False
+        
+        return all_ok
     
-    def get_file_hash(self, filepath):
-        """计算文件SHA256指纹"""
-        if not os.path.exists(filepath):
-            return None
-        sha256 = hashlib.sha256()
-        with open(filepath, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+    def install_dependencies(self):
+        """安装测试依赖"""
+        self.print_header("安装测试依赖")
+        
+        packages = [
+            'pytest>=7.0.0',
+            'pytest-cov>=4.0.0',
+            'pytest-timeout>=2.1.0',
+            'hypothesis>=6.0.0'
+        ]
+        
+        for package in packages:
+            print(f"安装 {package}...")
+            try:
+                subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', package],
+                    capture_output=True,
+                    check=True
+                )
+                print(f"{Colors.GREEN}✓ {package} 安装成功{Colors.ENDC}")
+            except:
+                print(f"{Colors.YELLOW}⚠ {package} 安装失败（可能已安装）{Colors.ENDC}")
     
-    def verify_content(self, filepath, expected_content):
-        """验证文件内容"""
-        if not os.path.exists(filepath):
-            return False, "文件不存在"
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            actual = f.read()
-        if actual == expected_content:
-            return True, "内容匹配"
-        return False, f"内容不匹配: {actual[:20]}..."
+    def run_syntax_check(self):
+        """语法检查"""
+        self.print_header("代码语法检查")
+        
+        python_files = [
+            'cli_encrypt.py',
+            'crypto_core.py',
+            'biometric_auth.py',
+            'steganography.py',
+            'file_manager.py'
+        ]
+        
+        all_ok = True
+        for file in python_files:
+            if not os.path.exists(file):
+                print(f"{Colors.YELLOW}⊘ {file} 不存在，跳过{Colors.ENDC}")
+                continue
+            
+            try:
+                subprocess.run(
+                    [sys.executable, '-m', 'py_compile', file],
+                    capture_output=True,
+                    check=True
+                )
+                print(f"{Colors.GREEN}✓ {file} 语法正确{Colors.ENDC}")
+            except:
+                print(f"{Colors.RED}✗ {file} 语法错误{Colors.ENDC}")
+                all_ok = False
+        
+        return all_ok
     
-    def verify_decryption(self, original_file, decrypted_file):
-        """验证解密结果"""
-        if not os.path.exists(decrypted_file):
-            return False, "解密文件不存在"
+    def run_unit_tests(self):
+        """运行单元测试"""
+        self.print_header("单元测试")
         
-        orig_hash = self.get_file_hash(original_file)
-        dec_hash = self.get_file_hash(decrypted_file)
+        if not os.path.exists('test_full.py'):
+            print(f"{Colors.YELLOW}⊘ test_full.py 不存在，跳过单元测试{Colors.ENDC}")
+            return True
         
-        if orig_hash == dec_hash:
-            return True, f"指纹匹配: {orig_hash[:16]}..."
-        return False, f"指纹不匹配: {orig_hash[:16]}... vs {dec_hash[:16]}..."
+        return self.run_command(
+            [sys.executable, '-m', 'pytest', 'test_full.py', '-v', '--tb=short', '--timeout=60'],
+            '单元测试',
+            timeout=120
+        )
     
-    def test_basic_encrypt_decrypt(self):
-        """测试基础加密解密"""
-        self.print_step(1, "基础加密解密")
+    def run_boundary_tests(self):
+        """运行边界测试"""
+        self.print_header("边界测试")
         
-        # 创建测试文件
-        test_file = "test_basic.txt"
-        content = "Hello World! 测试内容 123"
-        with open(os.path.join(self.test_dir, test_file), 'w') as f:
-            f.write(content)
+        if not os.path.exists('test_boundary.py'):
+            print(f"{Colors.YELLOW}⊘ test_boundary.py 不存在，跳过边界测试{Colors.ENDC}")
+            return True
         
-        enc_file = test_file + ".enc"
-        dec_file = test_file + ".dec"
-        
-        # 加密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py encrypt {test_file} -o {enc_file} -p "{self.test_password}" -f'
+        return self.run_command(
+            [sys.executable, '-m', 'pytest', 'test_boundary.py', '-v', '--tb=short', '--timeout=120'],
+            '边界测试',
+            timeout=180
         )
-        
-        if result.returncode != 0 or not os.path.exists(os.path.join(self.test_dir, enc_file)):
-            self.failed.append(("基础加密", result.stderr))
-            self.print_step(1, "基础加密解密", "fail")
-            return
-        
-        # 解密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py decrypt {enc_file} -o {dec_file} -p "{self.test_password}" -f'
-        )
-        
-        if result.returncode != 0:
-            self.failed.append(("基础解密", result.stderr))
-            self.print_step(1, "基础加密解密", "fail")
-            return
-        
-        # 验证
-        ok, msg = self.verify_decryption(
-            os.path.join(self.test_dir, test_file),
-            os.path.join(self.test_dir, dec_file)
-        )
-        
-        if ok:
-            self.passed.append("基础加密解密")
-            self.results['basic'] = {'hash': self.get_file_hash(os.path.join(self.test_dir, enc_file))}
-            self.print_step(1, "基础加密解密", "ok")
-        else:
-            self.failed.append(("基础解密验证", msg))
-            self.print_step(1, "基础加密解密", "fail")
     
-    def test_algorithm_chacha20(self):
-        """测试ChaCha20算法"""
-        self.print_step(2, "ChaCha20算法")
+    def run_e2e_tests(self):
+        """运行 E2E 测试"""
+        self.print_header("E2E 端到端测试")
         
-        test_file = "test_chacha.txt"
-        content = "ChaCha20 algorithm test"
-        with open(os.path.join(self.test_dir, test_file), 'w') as f:
-            f.write(content)
+        if not os.path.exists('test_e2e.py'):
+            print(f"{Colors.YELLOW}⊘ test_e2e.py 不存在，跳过 E2E 测试{Colors.ENDC}")
+            return True
         
-        enc_file = test_file + ".enc"
-        dec_file = test_file + ".dec"
-        
-        # 加密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py encrypt {test_file} -o {enc_file} -a chacha20 -p "{self.test_password}" -f'
+        return self.run_command(
+            [sys.executable, 'test_e2e.py'],
+            'E2E 测试',
+            timeout=300
         )
-        
-        if result.returncode != 0 or not os.path.exists(os.path.join(self.test_dir, enc_file)):
-            self.failed.append(("ChaCha20加密", result.stderr))
-            self.print_step(2, "ChaCha20算法", "fail")
-            return
-        
-        # 解密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py decrypt {enc_file} -o {dec_file} -p "{self.test_password}" -f'
-        )
-        
-        ok, msg = self.verify_decryption(
-            os.path.join(self.test_dir, test_file),
-            os.path.join(self.test_dir, dec_file)
-        )
-        
-        if ok:
-            self.passed.append("ChaCha20算法")
-            self.results['chacha20'] = {'hash': self.get_file_hash(os.path.join(self.test_dir, enc_file))}
-            self.print_step(2, "ChaCha20算法", "ok")
-        else:
-            self.failed.append(("ChaCha20验证", msg))
-            self.print_step(2, "ChaCha20算法", "fail")
     
-    def test_self_destruct_expiry(self):
-        """测试过期自毁"""
-        self.print_step(3, "过期自毁功能")
+    def run_coverage_report(self):
+        """生成覆盖率报告"""
+        self.print_header("代码覆盖率分析")
         
-        test_file = "test_expiry.txt"
-        content = "Expiry test content"
-        with open(os.path.join(self.test_dir, test_file), 'w') as f:
-            f.write(content)
+        test_files = []
+        if os.path.exists('test_full.py'):
+            test_files.append('test_full.py')
+        if os.path.exists('test_boundary.py'):
+            test_files.append('test_boundary.py')
         
-        enc_file = test_file + ".enc"
+        if not test_files:
+            print(f"{Colors.YELLOW}⊘ 没有测试文件，跳过覆盖率分析{Colors.ENDC}")
+            return True
         
-        # 加密（7天后过期）
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py encrypt {test_file} -o {enc_file} -e 7 -p "{self.test_password}" -f'
+        return self.run_command(
+            [sys.executable, '-m', 'pytest'] + test_files + [
+                '--cov=crypto_core',
+                '--cov=cli_encrypt',
+                '--cov-report=term-missing',
+                '--cov-report=html',
+                '--cov-report=json'
+            ],
+            '覆盖率分析',
+            timeout=180
         )
-        
-        if result.returncode != 0:
-            self.failed.append(("过期加密", result.stderr))
-            self.print_step(3, "过期自毁功能", "fail")
-            return
-        
-        # 验证文件存在（因为未过期，应该可以解密）
-        if os.path.exists(os.path.join(self.test_dir, enc_file)):
-            self.passed.append("过期自毁功能")
-            self.results['expiry'] = {'enabled': True}
-            self.print_step(3, "过期自毁功能", "ok")
-        else:
-            self.failed.append(("过期功能", "文件未生成"))
-            self.print_step(3, "过期自毁功能", "fail")
     
-    def test_stream_encryption(self):
-        """测试流式加密"""
-        self.print_step(4, "流式加密")
+    def run_performance_test(self):
+        """性能测试"""
+        self.print_header("性能测试")
         
-        stream_file = "test_stream.enc"
+        print("创建测试文件...")
+        test_file = 'perf_test.bin'
         
-        # 流加密
-        result = self.run_cmd(
-            f'echo "Stream test content" | python3 cli_encrypt.py stream-encrypt -p "{self.test_password}" > {stream_file}'
-        )
-        
-        if result.returncode != 0 or not os.path.exists(os.path.join(self.test_dir, stream_file)):
-            self.failed.append(("流加密", result.stderr))
-            self.print_step(4, "流式加密", "fail")
-            return
-        
-        # 流解密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py stream-decrypt -p "{self.test_password}" < {stream_file}'
-        )
-        
-        if result.returncode == 0 and "Stream test content" in result.stdout:
-            self.passed.append("流式加密")
-            self.print_step(4, "流式加密", "ok")
-        else:
-            self.failed.append(("流解密验证", result.stdout[:100]))
-            self.print_step(4, "流式加密", "fail")
+        try:
+            # 创建 5MB 测试文件
+            with open(test_file, 'wb') as f:
+                f.write(os.urandom(5 * 1024 * 1024))
+            
+            # 测试加密性能
+            start = time.time()
+            result = subprocess.run(
+                [sys.executable, 'cli_encrypt.py', 'encrypt', test_file, 
+                 '-o', test_file + '.enc', '-p', 'TestPass123!'],
+                capture_output=True,
+                timeout=60
+            )
+            encrypt_time = time.time() - start
+            
+            if result.returncode == 0:
+                print(f"{Colors.GREEN}✓ 加密 5MB 文件耗时: {encrypt_time:.2f}s{Colors.ENDC}")
+                
+                # 测试解密性能
+                start = time.time()
+                result = subprocess.run(
+                    [sys.executable, 'cli_encrypt.py', 'decrypt', test_file + '.enc',
+                     '-o', test_file + '.dec', '-p', 'TestPass123!'],
+                    capture_output=True,
+                    timeout=60
+                )
+                decrypt_time = time.time() - start
+                
+                if result.returncode == 0:
+                    print(f"{Colors.GREEN}✓ 解密 5MB 文件耗时: {decrypt_time:.2f}s{Colors.ENDC}")
+                    
+                    self.results['performance'] = {
+                        'file_size': '5MB',
+                        'encrypt_time': encrypt_time,
+                        'decrypt_time': decrypt_time,
+                        'encrypt_speed': f"{5/encrypt_time:.2f} MB/s",
+                        'decrypt_speed': f"{5/decrypt_time:.2f} MB/s"
+                    }
+                    
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"{Colors.RED}✗ 性能测试失败: {e}{Colors.ENDC}")
+            return False
+        finally:
+            # 清理测试文件
+            for f in [test_file, test_file + '.enc', test_file + '.dec']:
+                if os.path.exists(f):
+                    os.remove(f)
     
-    def test_directory_encryption(self):
-        """测试目录加密"""
-        self.print_step(5, "目录加密")
+    def save_report(self):
+        """保存测试报告"""
+        self.print_header("保存测试报告")
         
-        # 创建测试目录
-        os.makedirs(os.path.join(self.test_dir, "test_folder"), exist_ok=True)
-        with open(os.path.join(self.test_dir, "test_folder", "file1.txt"), 'w') as f:
-            f.write("File 1 content")
-        with open(os.path.join(self.test_dir, "test_folder", "file2.txt"), 'w') as f:
-            f.write("File 2 content")
+        report_file = f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
-        enc_file = "folder.vcdir"
-        dec_dir = "folder_restored"
-        
-        # 加密目录
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py encrypt-dir test_folder -o {enc_file} -p "{self.test_password}" -f'
-        )
-        
-        if result.returncode != 0:
-            self.failed.append(("目录加密", result.stderr))
-            self.print_step(5, "目录加密", "fail")
-            return
-        
-        # 解密目录
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py decrypt-dir {enc_file} -o {dec_dir} -p "{self.test_password}" -f'
-        )
-        
-        # 验证
-        if (os.path.exists(os.path.join(self.test_dir, dec_dir, "file1.txt")) and
-            os.path.exists(os.path.join(self.test_dir, dec_dir, "file2.txt"))):
-            self.passed.append("目录加密")
-            self.print_step(5, "目录加密", "ok")
-        else:
-            self.failed.append(("目录验证", "文件未正确恢复"))
-            self.print_step(5, "目录加密", "fail")
-    
-    def test_batch_encryption(self):
-        """测试批量加密"""
-        self.print_step(6, "批量加密")
-        
-        # 创建多个测试文件
-        for i in range(3):
-            with open(os.path.join(self.test_dir, f"batch{i}.txt"), 'w') as f:
-                f.write(f"Batch file {i}")
-        
-        # 批量加密
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py batch-encrypt "batch*.txt" -o batch_enc -p "{self.test_password}"'
-        )
-        
-        if result.returncode != 0:
-            self.failed.append(("批量加密", result.stderr))
-            self.print_step(6, "批量加密", "fail")
-            return
-        
-        # 检查输出
-        batch_dir = os.path.join(self.test_dir, "batch_enc")
-        enc_count = len([f for f in os.listdir(batch_dir) if f.endswith('.encrypted')])
-        
-        if enc_count == 3:
-            self.passed.append("批量加密")
-            self.print_step(6, "批量加密", "ok")
-        else:
-            self.failed.append(("批量加密计数", f"期望3个，实际{enc_count}个"))
-            self.print_step(6, "批量加密", "fail")
-    
-    def test_dry_run(self):
-        """测试预览功能"""
-        self.print_step(7, "Dry-run预览")
-        
-        result = self.run_cmd('python3 cli_encrypt.py dry-run test_basic.txt')
-        
-        if result.returncode == 0 and "预览" in result.stdout:
-            self.passed.append("Dry-run预览")
-            self.print_step(7, "Dry-run预览", "ok")
-        else:
-            self.failed.append(("Dry-run", result.stdout[:100]))
-            self.print_step(7, "Dry-run预览", "fail")
-    
-    def test_error_handling(self):
-        """测试错误处理"""
-        self.print_step(8, "错误处理")
-        
-        # 1. 错误密码应该失败
-        result = self.run_cmd(
-            'python3 cli_encrypt.py decrypt test_basic.txt.enc -o out.txt -p "WrongPassword" -f'
-        )
-        
-        wrong_password_ok = result.returncode != 0
-        
-        # 2. 不存在的文件应该报错
-        result = self.run_cmd(
-            'python3 cli_encrypt.py encrypt notexist.txt -o out.enc -p "Pass"'
-        )
-        
-        no_file_ok = result.returncode != 0
-        
-        if wrong_password_ok and no_file_ok:
-            self.passed.append("错误处理")
-            self.print_step(8, "错误处理", "ok")
-        else:
-            self.failed.append(("错误处理", f"wrong_pwd:{wrong_password_ok}, no_file:{no_file_ok}"))
-            self.print_step(8, "错误处理", "fail")
-    
-    def test_special_content(self):
-        """测试特殊内容"""
-        self.print_step(9, "特殊内容（中Emoji）")
-        
-        # 测试中文
-        test_file = "test_cn.txt"
-        content = "中文测试内容 😀🎉"
-        with open(os.path.join(self.test_dir, test_file), 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        enc_file = test_file + ".enc"
-        dec_file = test_file + ".dec"
-        
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py encrypt {test_file} -o {enc_file} -p "{self.test_password}" -f'
-        )
-        
-        if result.returncode != 0:
-            self.failed.append(("中文加密", result.stderr))
-            self.print_step(9, "特殊内容", "fail")
-            return
-        
-        result = self.run_cmd(
-            f'python3 cli_encrypt.py decrypt {enc_file} -o {dec_file} -p "{self.test_password}" -f'
-        )
-        
-        ok, msg = self.verify_content(
-            os.path.join(self.test_dir, dec_file),
-            content
-        )
-        
-        if ok:
-            self.passed.append("特殊内容")
-            self.print_step(9, "特殊内容", "ok")
-        else:
-            self.failed.append(("中文验证", msg))
-            self.print_step(9, "特殊内容", "fail")
+        try:
+            with open(report_file, 'w', encoding='utf-8') as f:
+                json.dump(self.results, f, indent=2, ensure_ascii=False)
+            
+            print(f"{Colors.GREEN}✓ 测试报告已保存: {report_file}{Colors.ENDC}")
+            return True
+        except Exception as e:
+            print(f"{Colors.RED}✗ 保存报告失败: {e}{Colors.ENDC}")
+            return False
     
     def print_summary(self):
-        """打印总结"""
+        """打印测试总结"""
         self.print_header("测试总结")
         
-        total = len(self.passed) + len(self.failed) + len(self.skipped)
+        total_tests = len(self.results['tests'])
+        passed_tests = sum(1 for t in self.results['tests'].values() if t.get('success'))
+        failed_tests = total_tests - passed_tests
         
-        print(f"\n总计: {total} 项")
-        print(f"✓ 通过: {len(self.passed)} 项")
-        print(f"✗ 失败: {len(self.failed)} 项")
-        print(f"⊘ 跳过: {len(self.skipped)} 项")
+        total_duration = sum(t.get('duration', 0) for t in self.results['tests'].values())
         
-        if self.failed:
-            print("\n【失败项目】")
-            for name, detail in self.failed:
-                print(f"  ✗ {name}")
-                if detail and len(str(detail)) < 100:
-                    print(f"    → {detail}")
+        print(f"总测试数: {total_tests}")
+        print(f"{Colors.GREEN}✓ 通过: {passed_tests}{Colors.ENDC}")
+        print(f"{Colors.RED}✗ 失败: {failed_tests}{Colors.ENDC}")
+        print(f"总耗时: {total_duration:.2f}s")
         
-        # 输出JSON结果
-        result_file = os.path.join(self.test_dir, "test_results.json")
-        result_data = {
-            'passed': self.passed,
-            'failed': self.failed,
-            'skipped': self.skipped,
-            'results': self.results,
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-        }
-        with open(result_file, 'w') as f:
-            json.dump(result_data, f, indent=2, ensure_ascii=False)
+        if 'performance' in self.results:
+            print(f"\n{Colors.CYAN}性能指标:{Colors.ENDC}")
+            perf = self.results['performance']
+            print(f"  加密速度: {perf['encrypt_speed']}")
+            print(f"  解密速度: {perf['decrypt_speed']}")
         
-        print(f"\n详细结果已保存: {result_file}")
-        
-        print("\n" + "=" * 60)
-        
-        if not self.failed:
-            print("🎉 所有自动化测试通过！")
+        if failed_tests == 0:
+            print(f"\n{Colors.GREEN}{Colors.BOLD}🎉 所有测试通过！{Colors.ENDC}")
             return 0
         else:
-            print(f"⚠️  {len(self.failed)} 项测试失败")
+            print(f"\n{Colors.RED}{Colors.BOLD}❌ 有 {failed_tests} 个测试失败{Colors.ENDC}")
+            print(f"\n{Colors.YELLOW}失败的测试:{Colors.ENDC}")
+            for name, result in self.results['tests'].items():
+                if not result.get('success'):
+                    print(f"  {Colors.RED}✗{Colors.ENDC} {name}")
             return 1
     
-    def run(self):
+    def run_all(self, quick=False):
         """运行所有测试"""
-        print("""
-╔═══════════════════════════════════════════════════════════════════════╗
-║                    CLI 加密工具自动化测试                          ║
-║                  无需手动输入密码，指纹自动验证                    ║
-╚═══════════════════════════════════════════════════════════════════════╝
-""")
+        self.start_time = time.time()
         
-        # 项目目录作为测试目录
-        self.test_dir = self.project_dir
-        os.chdir(self.project_dir)
+        print(f"\n{Colors.BOLD}{Colors.CYAN}")
+        print("╔═══════════════════════════════════════════════════════════════════╗")
+        print("║           CLI 加密工具 - 自动化测试套件                          ║")
+        print("╚═══════════════════════════════════════════════════════════════════╝")
+        print(f"{Colors.ENDC}")
         
-        print(f"测试目录: {self.test_dir}")
+        # 1. 检查依赖
+        if not self.check_dependencies():
+            print(f"\n{Colors.YELLOW}正在安装缺失的依赖...{Colors.ENDC}")
+            self.install_dependencies()
         
-        # 运行所有测试
-        self.test_basic_encrypt_decrypt()
-        self.test_algorithm_chacha20()
-        self.test_self_destruct_expiry()
-        self.test_stream_encryption()
-        self.test_directory_encryption()
-        self.test_batch_encryption()
-        self.test_dry_run()
-        self.test_error_handling()
-        self.test_special_content()
+        # 2. 语法检查
+        if not self.run_syntax_check():
+            print(f"\n{Colors.RED}语法检查失败，停止测试{Colors.ENDC}")
+            return 1
+        
+        # 3. 单元测试
+        self.run_unit_tests()
+        
+        if not quick:
+            # 4. 边界测试
+            self.run_boundary_tests()
             
-            return self.print_summary()
+            # 5. E2E 测试
+            self.run_e2e_tests()
             
-        finally:
-            print(f"\n测试目录: {self.test_dir}")
-            print("测试完成后可手动删除该目录")
+            # 6. 覆盖率报告
+            self.run_coverage_report()
+            
+            # 7. 性能测试
+            self.run_performance_test()
+        
+        # 8. 保存报告
+        self.save_report()
+        
+        # 9. 打印总结
+        exit_code = self.print_summary()
+        
+        total_time = time.time() - self.start_time
+        print(f"\n总运行时间: {total_time:.2f}s\n")
+        
+        return exit_code
 
 
 def main():
-    sys.exit(AutoTestRunner().run())
+    """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='CLI 加密工具自动化测试')
+    parser.add_argument('--quick', action='store_true', help='快速测试（仅单元测试）')
+    parser.add_argument('--e2e-only', action='store_true', help='仅运行 E2E 测试')
+    parser.add_argument('--coverage', action='store_true', help='仅生成覆盖率报告')
+    
+    args = parser.parse_args()
+    
+    runner = AutoTestRunner()
+    
+    if args.e2e_only:
+        runner.run_e2e_tests()
+        sys.exit(0)
+    elif args.coverage:
+        runner.run_coverage_report()
+        sys.exit(0)
+    else:
+        exit_code = runner.run_all(quick=args.quick)
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
